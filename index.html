@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PT Logistics Scanner System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * {
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        input, select { -webkit-user-select: text; user-select: text; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .pulse-scan {
+            animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .success-animation {
+            animation: successPulse 0.5s ease-out;
+        }
+        @keyframes successPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .pt-green { background-color: #5CB85C; }
+        .pt-green-dark { background-color: #4CAE4C; }
+        .pt-green-light { background-color: #E8F5E9; }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+    <div id="app" class="min-h-screen"></div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            // *** สำคัญ: ต้องเปลี่ยนเป็น URL ที่ได้จากการ Deploy Web App ***
+            // SHEET_URL: 'YOUR_DEPLOYED_WEB_APP_URL_HERE',
+            SHEET_URL: 'https://script.google.com/macros/s/AKfycbzta_Ae39fTeuwb_U1FxnsRnpoa1eeYCwlzvp66CdBxw2GjC08hHkjKLFHmP6A8avQB/exec',
+            SHEET_ID: '1B0RQOuLRoPKpCzsoJ_DlXbsGiHNZrq2AY-FXk5Z_wog',
+            SHEET_NAME: 'Driver',
+            STORAGE_KEY: 'scanner_pending_data'
+        };
+
+        // State Management
+        let state = {
+            currentUser: null,
+            currentWave: null,
+            scannedItems: [],
+            isScanning: false,
+            lastScanTime: 0,
+            isSending: false
+        };
+
+        // Utility Functions
+        const formatDateTime = () => {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+        };
+
+        const saveToLocal = (data) => {
+            try {
+                const existing = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY) || '[]');
+                existing.push(...data);
+                localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(existing));
+                return true;
+            } catch (e) {
+                console.error('Save error:', e);
+                return false;
+            }
+        };
+
+        const getPendingData = () => {
+            try {
+                return JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY) || '[]');
+            } catch {
+                return [];
+            }
+        };
+
+        const clearPendingData = () => {
+            localStorage.removeItem(CONFIG.STORAGE_KEY);
+        };
+
+        const sendToGoogleSheet = async (data) => {
+            try {
+                const payload = {
+                    sheetId: CONFIG.SHEET_ID,
+                    sheetName: CONFIG.SHEET_NAME,
+                    rows: data
+                };
+
+                console.log('Sending data to Google Sheet:', payload);
+                
+                // Note: Using no-cors mode means we won't get a response
+                // but the data will still be sent
+                const response = await fetch(CONFIG.SHEET_URL, {
+                    method: 'POST',
+                    mode: 'no-cors', // Required for Google Apps Script
+                    cache: 'no-cache',
+                    headers: {
+                        'Content-Type': 'text/plain', // Changed from application/json
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                console.log('Data sent to Google Sheet (no-cors mode)');
+                // Since we're using no-cors, we assume success if no error thrown
+                return true;
+            } catch (error) {
+                console.error('Send to Google Sheet error:', error);
+                alert('เกิดข้อผิดพลาดในการส่งข้อมูล: ' + error.message);
+                return false;
+            }
+        };
+
+        const syncPendingData = async () => {
+            const pending = getPendingData();
+            if (pending.length === 0) return;
+            
+            const success = await sendToGoogleSheet(pending);
+            if (success) {
+                clearPendingData();
+                console.log('Synced', pending.length, 'rows to Google Sheet');
+            }
+        };
+
+        // Test API Connection
+        const testAPIConnection = async () => {
+            console.log('Testing API connection to:', CONFIG.SHEET_URL);
+            
+            const testData = [
+                [formatDateTime(), 'TEST', 'API Test', 'TEST_SKU']
+            ];
+            
+            const payload = {
+                sheetId: CONFIG.SHEET_ID,
+                sheetName: CONFIG.SHEET_NAME,
+                rows: testData
+            };
+            
+            try {
+                const response = await fetch(CONFIG.SHEET_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    cache: 'no-cache',
+                    headers: {
+                        'Content-Type': 'text/plain',
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                alert('ทดสอบการเชื่อมต่อสำเร็จ!\n\nหมายเหตุ: ข้อมูลทดสอบถูกส่งไปยัง Google Sheet\nกรุณาตรวจสอบใน Sheet ว่ามีข้อมูล TEST ถูกเพิ่มหรือไม่');
+                console.log('Test data sent successfully');
+            } catch (error) {
+                alert('ไม่สามารถเชื่อมต่อกับ Google Sheet ได้\n\nกรุณาตรวจสอบ:\n1. URL ของ Web App ถูกต้อง\n2. Web App ถูก Deploy แล้ว\n3. Permission ตั้งเป็น Anyone');
+                console.error('API test failed:', error);
+            }
+        };
+
+        // Handle Login Function
+        const handleLogin = (e) => {
+            if (e) e.preventDefault();
+            const wave = document.getElementById('wave').value.trim();
+            const driverName = document.getElementById('driverName').value.trim();
+            
+            if (!wave || !driverName) {
+                alert('กรุณากรอกข้อมูลให้ครบถ้วน');
+                return;
+            }
+            
+            state.currentUser = driverName;
+            state.currentWave = wave;
+            // Don't save to localStorage to prevent auto-login
+            render();
+        };
+
+        // Components
+        const LoginScreen = () => {
+            return `
+                <div class="min-h-screen bg-white">
+                    <!-- Header -->
+                    <div class="bg-white shadow-sm border-b">
+                        <div class="px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center text-white font-bold shadow">
+                                    PTLG
+                                </div>
+                                <div>
+                                    <h1 class="text-xl font-semibold text-gray-800">PT Logistics Scanner</h1>
+                                    <p class="text-sm text-gray-500">Scanning System at DC Wangnoi</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Login Form -->
+                    <div class="flex items-center justify-center px-4 py-12">
+                        <div class="bg-white border rounded-lg shadow-lg p-8 w-full max-w-md fade-in">
+                            <div class="text-center mb-8">
+                                <div class="w-24 h-24 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                                    <span class="text-white font-bold text-2xl">PTLG</span>
+                                </div>
+                                <h2 class="text-2xl font-bold text-gray-800">เข้าสู่ระบบ</h2>
+                                <p class="text-gray-600 mt-2">Scanner System Login</p>
+                            </div>
+                            
+                            <form onsubmit="return false;">
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Wave</label>
+                                        <input type="text" id="wave" 
+                                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600 focus:border-transparent"
+                                               placeholder="ระบุ Wave เช่น Wave 1, Morning, A1" required>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Driver Name</label>
+                                        <input type="text" id="driverName" 
+                                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-600 focus:border-transparent"
+                                               placeholder="ชื่อพนักงานขับรถ" required>
+                                    </div>
+                                </div>
+                                
+                                <button onclick="handleLogin(event)"
+                                        class="w-full mt-6 bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors shadow">
+                                    เข้าสู่ระบบ
+                                </button>
+                                
+                                
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        // Handle Scan Function
+        const handleScan = () => {
+            const scanInput = document.getElementById('scanInput');
+            const sku = scanInput.value.trim();
+            
+            if (!sku) return;
+            
+            // Prevent duplicate rapid scans
+            const now = Date.now();
+            if (now - state.lastScanTime < 300) return;
+            state.lastScanTime = now;
+            
+            // Add scanned item
+            const scanTime = formatDateTime();
+            state.scannedItems.push({
+                dateTime: scanTime,
+                wave: state.currentWave,
+                driverName: state.currentUser,
+                sku: sku
+            });
+            
+            // Audio feedback for success
+            playBeep(true);
+            
+            // Visual feedback
+            const counter = document.getElementById('counter');
+            if (counter) {
+                counter.classList.add('success-animation');
+                setTimeout(() => counter.classList.remove('success-animation'), 500);
+            }
+            
+            // Clear input and re-render
+            scanInput.value = '';
+            render();
+            
+            // Re-focus after render
+            setTimeout(() => {
+                document.getElementById('scanInput')?.focus();
+            }, 100);
+        };
+
+        // Handle Confirm Function
+        const handleConfirm = async () => {
+            if (state.scannedItems.length === 0) {
+                alert('ไม่มีสินค้าที่สแกน');
+                return;
+            }
+            
+            if (!confirm(`ยืนยันการส่งข้อมูล ${state.scannedItems.length} รายการ?`)) {
+                return;
+            }
+            
+            state.isSending = true;
+            render();
+            
+            // Format data for Google Sheet
+            const sheetData = state.scannedItems.map(item => [
+                item.dateTime,    // Column A
+                item.wave,        // Column B
+                item.driverName,  // Column C
+                item.sku          // Column D
+            ]);
+            
+            console.log('Preparing to send data:', sheetData);
+            
+            // Save to local first
+            const saved = saveToLocal(sheetData);
+            
+            if (saved) {
+                console.log('Data saved locally, attempting to sync...');
+                const synced = await sendToGoogleSheet(sheetData);
+                
+                // Always clear local pending data after attempting to send
+                if (synced) {
+                    clearPendingData();
+                }
+                
+                // Show appropriate message
+                alert(`บันทึกข้อมูล ${state.scannedItems.length} รายการสำเร็จ\n\nกลับสู่หน้าเข้าสู่ระบบ`);
+                
+                // Force logout - Clear all session data and go back to login
+                state.currentUser = null;
+                state.currentWave = null;
+                state.scannedItems = [];
+                state.isSending = false;
+                render();
+            } else {
+                alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาลองใหม่');
+                state.isSending = false;
+                render();
+            }
+        };
+
+        // Handle Logout Function
+        const handleLogout = () => {
+            if (state.scannedItems.length > 0) {
+                if (!confirm('มีสินค้าที่ยังไม่ได้ส่ง ต้องการออกจากระบบ?')) {
+                    return;
+                }
+            }
+            state.currentUser = null;
+            state.currentWave = null;
+            state.scannedItems = [];
+            render();
+        };
+
+        // Remove Item Function
+        const removeItem = (index) => {
+            if (confirm('ลบรายการนี้?')) {
+                state.scannedItems.splice(index, 1);
+                render();
+            }
+        };
+
+        const ScannerScreen = () => {
+            // Group items by SKU for display
+            const groupedItems = {};
+            state.scannedItems.forEach(item => {
+                if (!groupedItems[item.sku]) {
+                    groupedItems[item.sku] = {
+                        sku: item.sku,
+                        count: 0,
+                        firstScan: item.dateTime
+                    };
+                }
+                groupedItems[item.sku].count++;
+            });
+
+            const totalScans = state.scannedItems.length;
+            const uniqueSKUs = Object.keys(groupedItems).length;
+
+            return `
+                <div class="min-h-screen bg-gray-50">
+                    <!-- Header -->
+                    <div class="bg-white shadow-sm border-b">
+                        <div class="px-4 py-3">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white font-bold text-sm shadow">
+                                        PTLG
+                                    </div>
+                                    <div>
+                                        <h1 class="text-lg font-semibold text-gray-800">PT Logistics Scanner</h1>
+                                        <p class="text-xs text-gray-500">Performance Monitoring At DC Wangnoi</p>
+                                    </div>
+                                </div>
+                                <button onclick="handleLogout()" 
+                                        class="bg-red-500 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-red-600 transition-colors">
+                                    ออกจากระบบ
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Tabs -->
+                        <div class="flex px-4 gap-2 pb-2">
+                            <div class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path>
+                                </svg>
+                                Scanner
+                            </div>
+                            <div class="bg-gray-100 text-gray-600 px-4 py-2 rounded-lg text-sm">
+                                ${state.currentWave} | ${state.currentUser}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Scan Input -->
+                    <div class="bg-white shadow-sm border-b p-4">
+                        <div class="flex gap-2">
+                            <input type="text" id="scanInput" 
+                                   class="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-lg focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600"
+                                   placeholder="สแกน SKU..." 
+                                   ${state.isSending ? 'disabled' : ''}
+                                   onkeypress="if(event.key === 'Enter' && !${state.isSending}) { handleScan() }"
+                                   autofocus>
+                            <button onclick="handleScan()" 
+                                    ${state.isSending ? 'disabled' : ''}
+                                    class="bg-green-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-700 transition-colors shadow ${state.isSending ? 'opacity-50' : ''}">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <!-- Stats Cards -->
+                        <div class="grid grid-cols-3 gap-3 mt-4">
+                            <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                <p class="text-xs text-blue-600 font-medium">SKU ที่แตกต่าง</p>
+                                <p class="text-2xl font-bold text-blue-700">${uniqueSKUs}</p>
+                            </div>
+                            <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+                                <p class="text-xs text-green-600 font-medium">สแกนทั้งหมด</p>
+                                <p id="counter" class="text-2xl font-bold text-green-700">${totalScans}</p>
+                            </div>
+                            <div class="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                                <p class="text-xs text-orange-600 font-medium">รอส่ง</p>
+                                <p class="text-2xl font-bold text-orange-700">${getPendingData().length}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SKU List -->
+                    <div class="p-4 pb-24">
+                        ${Object.keys(groupedItems).length === 0 ? `
+                            <div class="text-center py-12 bg-white rounded-lg border">
+                                <div class="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <svg class="w-12 h-12 text-gray-400 pulse-scan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path>
+                                    </svg>
+                                </div>
+                                <p class="text-gray-500 font-medium">พร้อมสำหรับการสแกน</p>
+                                <p class="text-xs text-gray-400 mt-2">Wave: ${state.currentWave}</p>
+                            </div>
+                        ` : `
+                            <div class="space-y-2">
+                                <h3 class="text-sm font-semibold text-gray-600 mb-3">รายการ SKU ที่สแกน</h3>
+                                ${Object.values(groupedItems).map((item, index) => `
+                                    <div class="bg-white rounded-lg border p-4 fade-in hover:shadow-sm transition-shadow">
+                                        <div class="flex justify-between items-center">
+                                            <div class="flex-1">
+                                                <h3 class="font-mono font-semibold text-gray-800 text-lg">${item.sku}</h3>
+                                                <p class="text-xs text-gray-500">สแกนครั้งแรก: ${item.firstScan}</p>
+                                            </div>
+                                            <div class="flex items-center gap-3">
+                                                <div class="bg-green-50 px-4 py-2 rounded-lg text-center">
+                                                    <p class="text-2xl font-bold text-green-700">${item.count}</p>
+                                                    <p class="text-xs text-gray-600">จำนวน</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            
+                            <!-- Recent Scans -->
+                            <div class="mt-6">
+                                <h3 class="text-sm font-semibold text-gray-600 mb-3">รายการสแกนล่าสุด</h3>
+                                <div class="bg-white rounded-lg border">
+                                    ${state.scannedItems.slice(-5).reverse().map((item, idx) => `
+                                        <div class="px-4 py-2 ${idx !== 0 ? 'border-t' : ''} fade-in">
+                                            <div class="flex justify-between items-center">
+                                                <span class="font-mono text-sm font-medium">${item.sku}</span>
+                                                <span class="text-xs text-gray-500">${item.dateTime}</span>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `}
+                    </div>
+
+                    <!-- Confirm Button -->
+                    ${state.scannedItems.length > 0 ? `
+                        <div class="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg p-4">
+                            <button onclick="handleConfirm()" 
+                                    ${state.isSending ? 'disabled' : ''}
+                                    class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold text-lg hover:bg-green-700 transition-colors shadow ${state.isSending ? 'opacity-50' : ''} flex items-center justify-center gap-2">
+                                ${state.isSending ? 
+                                    `<svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    กำลังส่งข้อมูล...` : 
+                                    `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    ยืนยันการส่ง (${totalScans} รายการ)`}
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        };
+
+        // Audio feedback
+        const playBeep = (success = true) => {
+            try {
+                const audio = new AudioContext();
+                const oscillator = audio.createOscillator();
+                const gainNode = audio.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audio.destination);
+                
+                oscillator.frequency.value = success ? 800 : 400;
+                oscillator.type = 'sine';
+                
+                gainNode.gain.setValueAtTime(0.3, audio.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audio.currentTime + 0.1);
+                
+                oscillator.start(audio.currentTime);
+                oscillator.stop(audio.currentTime + 0.1);
+            } catch (e) {
+                console.log('Audio not supported');
+            }
+        };
+
+        // Main render function
+        const render = () => {
+            const app = document.getElementById('app');
+            
+            // Don't auto-login after confirm - always show login screen unless actively logged in
+            
+            // Render appropriate screen
+            app.innerHTML = state.currentUser ? ScannerScreen() : LoginScreen();
+            
+            // Auto-focus scan input
+            if (state.currentUser && !state.isSending) {
+                setTimeout(() => {
+                    document.getElementById('scanInput')?.focus();
+                }, 100);
+            }
+        };
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            render();
+            
+            // Try to sync any pending data on startup
+            syncPendingData();
+            
+            // Periodic sync every 30 seconds
+            setInterval(() => {
+                if (!state.isSending) {
+                    syncPendingData();
+                }
+            }, 30000);
+            
+            // Show pending count if any
+            const pending = getPendingData();
+            if (pending.length > 0) {
+                console.log(`มีข้อมูลรอส่ง ${pending.length} รายการ`);
+            }
+        });
+
+        // Handle page visibility for re-focusing
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && state.currentUser && !state.isSending) {
+                setTimeout(() => {
+                    document.getElementById('scanInput')?.focus();
+                }, 100);
+            }
+        });
+
+        // Google Apps Script Code
+        const gasCode = `
+// Google Apps Script Code for PT Logistics
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const sheet = SpreadsheetApp.openById(data.sheetId).getSheetByName(data.sheetName);
+    
+    // Append rows to sheet
+    if (data.rows && data.rows.length > 0) {
+      data.rows.forEach(row => {
+        sheet.appendRow(row);
+      });
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'success',
+      rowsAdded: data.rows.length
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'error',
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput("PT Logistics Scanner API is running");
+}
+`;
+    </script>
+</body>
+</html>
+
